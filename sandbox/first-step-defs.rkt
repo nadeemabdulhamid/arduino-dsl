@@ -1,8 +1,10 @@
 #lang at-exp racket
 
-(require rackunit)
+(require rackunit
+         2htdp/batch-io)
 
 (provide display-sketch
+         write-sketch
          define-input-pin
          define-output-pin
          states
@@ -367,7 +369,12 @@ void loop() {
 
 
 (define (display-sketch [sk GS])
-  (display
+  (display (full-sketch-string sk)))
+
+(define (write-sketch filepath [sk GS])
+ (write-file filepath (full-sketch-string sk) ))
+
+(define (full-sketch-string sk)
   @stringify{
 #include <Bounce2.h>
 
@@ -392,7 +399,7 @@ void loop() {
 
   @express-transitions[sk]
 }
- }))
+ })
 
 
 
