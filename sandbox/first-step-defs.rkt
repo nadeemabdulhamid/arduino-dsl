@@ -1,55 +1,108 @@
 #lang at-exp racket
 
+(require rackunit)
+
 (provide display-sketch
          define-input-pin
          define-output-pin
          states
          initial-state
-         states-outputs)
-
+         states-outputs
+         transitions
+         GS)
 
 
 ; An InputPair  is (list Symbol Number)   i.e.  '(Symbol Number)
 ; An OutputPair is (list Symbol Number)   i.e.  '(Symbol Number)
 ; A  State      is (list Symbol)          i.e.  '(Symbol)
 
-; (sketch [Listof InputPair] [Listof OutputPair] [Listof States]
-(define-struct sketch (inputs outputs states) #:mutable #:transparent)
-(define GS (make-sketch '() '() '()))
+; (sketch [Listof InputPair] [Listof OutputPair] [Listof States]  State   [Listof Rule]
+(define-struct sketch (inputs outputs states init rules trans) #:mutable #:transparent)
+(define GS (make-sketch '() '() '() #f '() '()))
 
-(define-struct rule (symbol input) #:mutable #:transparent)
-(define RULES (make-rule '() '()))
+(define-struct rule (state pins) #:mutable #:transparent)
+;;;;(define RULES (make-rule '() '()))
+
+(define-struct transition (cur inp next) #:mutable #:transparent)
+
+
+;                                                        
+;                                                        
+;                                                        
+;                                                        
+;     ;;; ;  ;;;;;;;    ;;     ;;;;;;;  ;;;;;;;    ;;; ; 
+;    ;   ;;  ;  ;  ;     ;     ;  ;  ;   ;    ;   ;   ;; 
+;    ;    ;  ;  ;  ;    ; ;    ;  ;  ;   ;  ; ;   ;    ; 
+;     ;;;;   ;  ;  ;    ; ;    ;  ;  ;   ;;;;      ;;;;  
+;         ;     ;      ;   ;      ;      ;  ;          ; 
+;    ;    ;     ;      ;;;;;      ;      ;    ;   ;    ; 
+;    ;;   ;     ;     ;     ;     ;      ;    ;   ;;   ; 
+;    ; ;;;    ;;;;;  ;;;   ;;;  ;;;;;   ;;;;;;;   ; ;;;  
+;                                                        
+;                                                        
+;                                                        
+;
+
+;;State -> String
+   ;example input:
+       ; (initial-state 'EVEN_ON)
+   ;example output:
+       ; State currentState = EVEN_ON;
+
+(define (initial-state a-state [sk GS])
+  (set-sketch-init! sk a-state))
+ ; (format "currentState= ~a;" (symbol->string(a-state))))
 
 
 
 ;;Listof States -> String
-;example input:
+   ;example input:
        ;(define state-outputs '(EVEN_ON, ADD_ON, RETURN_ODD, RETURN_EVEN))
-; example output:
-#|
-        enum State{
-           EVEN_ON,
-           ODD_ON,
-           RETURN_ODD,
-           RETURN_EVEN
-        }
-|#
-(define (states a-los)
-  (define strs
-      (string-append "enumState{"
-                     (for/list ([ip  a-los])
-                        (symbol->string(first ip)))))
-  (string-join strs "\n"))
+   ; example output:
+#|       enum State{
+             EVEN_ON,
+             ODD_ON,
+             RETURN_ODD,
+             RETURN_EVEN
+         }|#
 
+(define (states a-los [sk GS])
+  (set-sketch-states! sk a-los))
 
-;;State -> String
-(define (initial-state a-state)
-  (format "currentState= ~a;" (symbol->string(a-state))))
+(define (generate-states-def a-los)
+  (define strs (map symbol->string a-los))
+  ;    (for/list ([s a-los])
+  ;      (symbol->string s)))
+  (string-append "enum State {" (string-join strs ",\n") "};"))
 
 
 
+;; Symbol Sketch -> Void 
+(define (define-state-list sym [sk GS])
+  (define cur-states (sketch-states sk))
+  (set-sketch-states! sk (cons `(,sym) cur-states)))
 
-;; Listof Rules -> String 
+
+;                                               
+;                                               
+;                                               
+;                                               
+;   ;;;;;    ;;;  ;;; ;;;;;    ;;;;;;;    ;;; ; 
+;    ;   ;    ;    ;    ;       ;    ;   ;   ;; 
+;    ;   ;    ;    ;    ;       ;  ; ;   ;    ; 
+;    ;   ;    ;    ;    ;       ;;;;      ;;;;  
+;    ;;;;     ;    ;    ;   ;   ;  ;          ; 
+;    ;   ;    ;    ;    ;   ;   ;    ;   ;    ; 
+;    ;    ;   ;    ;    ;   ;   ;    ;   ;;   ; 
+;   ;;;   ;;   ;;;;   ;;;;;;;  ;;;;;;;   ; ;;;  
+;                                               
+;                                               
+;                                               
+;                                               
+
+
+; ListOf rules -> Sketch
+;; updates the sketch-rules with the outputs given by the user
 ;example input
 #|
      '( (EVEN_ON p2)
@@ -57,6 +110,22 @@
         (RETURN_ODD )
         (RETURN_EVEN p1 p2) ))
 |#
+; the output is just the updated sketch 
+(define (states-outputs rules [sk GS])
+  (set-sketch-rules! sk (for/list ([r rules])
+                          (rule (first r) (rest r))))
+  sk)
+
+(check-equal? (states-outputs '() (make-sketch '() '() '() #f '() '()))
+              (make-sketch '() '() '() #f '() '()))
+(check-equal? (states-outputs '( (EVEN_ON p1 p2))
+                              (make-sketch '() '() '() #f '() '()))
+              (make-sketch '() '() '() #f (list (rule 'EVEN_ON '(p1 p2))) '()))
+
+
+;; Sketch -> String
+;; uses sketch-rules to express the rules needed for each state 
+;input is just the current sketch
 
 ;example output
 #|
@@ -73,56 +142,96 @@
         digitalWrite(p1, HIGH);
         digitalWrite(p2, HIGH);
 |#
-(define (states-outputs rules)
-   0)
+(define (express-rules sk)
+
+  
+  (define all-pins (map first (sketch-outputs sk)))  ; listof symbol
+  
+  (define (express-write-for cur-pin rule-pins)
+    (format "digitalWrite(~a, ~a);"
+                 cur-pin
+                 (if (member cur-pin rule-pins) "HIGH" "LOW")))
+
+  (string-join
+   (for/list ([rule (sketch-rules sk)])  ; for each rule in rules provided by user 
+     (define pin-settings  
+       (for/list ([p all-pins]) (express-write-for p (rule-pins rule)))) ; for each output pin,  if they are declared in state outputs-> turn them HIGH, otherwise, LOW
+     (format "if (currentState == ~a) {~a}"
+             (rule-state rule)  ; each rule in the sketch-rules
+             (string-join pin-settings "\n")))
+   "\n"))
+
+
+; (define-struct transition (cur inp next) #:mutable #:transparent)
 
 
 
+(define (transitions a-lot [sk GS])
+  (set-sketch-trans! sk (for/list ([t a-lot])
+                          (transition (first t) (second t) (third t)))))
+
+
+(define (express-transitions [sk GS])
+  (string-append
+  (string-join
+    (for/list ([b (sketch-inputs sk)])
+      (format  "debouncer_~a.update(); \n boolean ~a_pressed = debouncer_~a.fell();"
+              (first b)(first b) (first b))) "\n")
+
+  "\n"
+  (format "if (currentState == ~a && ~a_pressed) { currentState = ~a;}" ; builds the first if statement
+          (transition-cur (first (sketch-trans sk)))
+          (transition-inp (first (sketch-trans sk)))
+          (transition-next(first (sketch-trans sk))))
+  "\n"
+  (string-join
+  (for/list ([t (sketch-trans sk)])
+      (format "else if (currentState == ~a && ~a_pressed){ currentState = ~a;}" ; does the same thing but is now else if statements 
+              (transition-cur t)
+              (transition-inp t)
+              (transition-next t))) "\n")))
+
+
+#|
+
+void loop() {
+  bool btnA_pressed =  debouncer_btnA.fell();
+  bool btnB_pressed =  debouncer_btnB.fell();
+
+
+ ....
+
+
+  if (currentState == EVEN_ON && btnA_pressed) { currentState = ODD_ON; }
+  else if (currentState == ODD_ON && btnA_pressed) { currentState = EVEN_ON; }
+  ...
+
+
+|#
+
+
+;                                               
+;                                               
+;                                               
+;                                               
+;   ;;;;;;;  ;;;  ;;; ;;;;;;   ;;;  ;;; ;;;;;;; 
+;      ;      ;;   ;   ;    ;   ;    ;  ;  ;  ; 
+;      ;      ; ;  ;   ;    ;   ;    ;  ;  ;  ; 
+;      ;      ; ;  ;   ;    ;   ;    ;  ;  ;  ; 
+;      ;      ;  ; ;   ;;;;;    ;    ;     ;    
+;      ;      ;  ; ;   ;        ;    ;     ;    
+;      ;      ;   ;;   ;        ;    ;     ;    
+;   ;;;;;;;  ;;;  ;;  ;;;;;      ;;;;    ;;;;;  
+;                                               
+;                                               
+;                                               
+;                                               
 
 ; Symbol Number Sketch -> Void
 (define (define-input-pin sym num [sk GS])
   (define cur-inputs (sketch-inputs sk))
-   ;  List curInputs = sk.inputs;
-  
   (set-sketch-inputs! sk (cons `(,sym ,num) cur-inputs))
-   ; sk.inputs =  new Pair(sym, num) + curInputs;
   )
-
-(define (define-state-list sym [sk GS])
-  (define cur-states (sketch-states sk))
-  (set-sketch-states! sk (cons `(,sym) cur-states)))
-
-
-#|(define (define-rules sym inp [r RULES])
-  (define cur-rules (rule r))
-  (set-rule! r (cons `(,sym ,inp) cur-rules)))
-|#
-
-  (define (define-rule-symbols sym [r RULES])
-    (define cur-symbols (rule-symbol r))
-    (set-rule-symbol! r (cons `(,sym) cur-symbols)))
-
-;; rule inputs = listof inputs
-(define (define-rule-inputs loi [r RULES])
-    (define cur-inputs (rule-input r))
-    (set-rule-input! r (cons `(,loi) cur-inputs)))
-
-
-
-;Symbol Number Sketch -> Void
-(define (define-output-pin sym num [sk GS])
-  (define cur-outputs (sketch-outputs sk))
-   ;  List curOutputs = sk.Outputs;
-  
-  (set-sketch-outputs! sk (cons `(,sym ,num) cur-outputs))
-   ; sk.inputs =  new Pair(sym, num) + curOutputs;
-  )
-
-
-
-; (listof Any) -> String
-(define (stringify . stuff)
-  (apply string-append (map (λ(s) (~a s)) stuff)))
 
 
 
@@ -136,10 +245,9 @@
     (for/list ([ip  loi])
       ;(string-append "const int " (symbol->string (first ip)) " = " (number->string (second ip)) ";")))
       (string-append (format "const int ~a = ~a;" (first ip) (second ip))
-                     "\n" (format "Bounce debouncer_~a = Bounce();" (symbol->string(first ip))))))
-
-      
+                     "\n" (format "Bounce debouncer_~a = Bounce();" (symbol->string(first ip))))))      
   (string-join strs "\n"))
+
 
 
 ; (listof InputPair) -> String
@@ -150,10 +258,37 @@
   (define strs
     (for/list ([ip  loi])
       ;(string-append "pinMode( " (symbol->string (first ip)) ", INPUT);")))
-      (format "pinMode(~a, INPUT);" (first ip))))
-
-      
+      (format "debouncer_~a.attach(~a, INPUT);" (first ip)(first ip))))
   (string-join strs "\n"))
+
+
+
+;                                                        
+;                                                        
+;                                                        
+;                                                        
+;     ;;;;   ;;;  ;;; ;;;;;;;  ;;;;;;   ;;;  ;;; ;;;;;;; 
+;    ;    ;   ;    ;  ;  ;  ;   ;    ;   ;    ;  ;  ;  ; 
+;   ;      ;  ;    ;  ;  ;  ;   ;    ;   ;    ;  ;  ;  ; 
+;   ;      ;  ;    ;  ;  ;  ;   ;    ;   ;    ;  ;  ;  ; 
+;   ;      ;  ;    ;     ;      ;;;;;    ;    ;     ;    
+;   ;      ;  ;    ;     ;      ;        ;    ;     ;    
+;    ;    ;   ;    ;     ;      ;        ;    ;     ;    
+;     ;;;;     ;;;;    ;;;;;   ;;;;;      ;;;;    ;;;;;  
+;                                                        
+;                                                        
+;                                                        
+;                                                        
+
+
+;Symbol Number Sketch -> Void
+(define (define-output-pin sym num [sk GS])
+  (define cur-outputs (sketch-outputs sk))
+   ;  List curOutputs = sk.Outputs;
+  
+  (set-sketch-outputs! sk (cons `(,sym ,num) cur-outputs))
+   ; sk.inputs =  new Pair(sym, num) + curOutputs;
+  )
 
 
 ; (listof OutputPair) -> String
@@ -183,14 +318,53 @@
       
   (string-join strs "\n"))
 
+;                                                                 
+;                                                                 
+;                                                                 
+;                                                                 
+;   ;;;  ;;; ;;;;;;;  ;;;;;    ;;;;;;   ;;;;;;;  ;;;;;      ;;; ; 
+;    ;    ;   ;    ;    ;       ;    ;   ;    ;   ;   ;    ;   ;; 
+;    ;    ;   ;  ; ;    ;       ;    ;   ;  ; ;   ;   ;    ;    ; 
+;    ;;;;;;   ;;;;      ;       ;    ;   ;;;;     ;   ;     ;;;;  
+;    ;    ;   ;  ;      ;   ;   ;;;;;    ;  ;     ;;;;          ; 
+;    ;    ;   ;    ;    ;   ;   ;        ;    ;   ;   ;    ;    ; 
+;    ;    ;   ;    ;    ;   ;   ;        ;    ;   ;    ;   ;;   ; 
+;   ;;;  ;;; ;;;;;;;  ;;;;;;;  ;;;;;    ;;;;;;;  ;;;   ;;  ; ;;;  
+;                                                                 
+;                                                                 
+;                                                                 
+;                                                                 
 
-#|
-;;(list of States) -> String?
-;; creates an arrayList of states
-(define (build-state-array los)
-  (define strs
-    (for/list ([ip loi])
-      |#
+; (listof Any) -> String
+(define (stringify . stuff)
+  (apply string-append (map (λ(s) (~a s)) stuff)))
+
+
+
+
+
+
+
+
+
+;                                                                                                              
+;                                                                                                              
+;                                                                                                              
+;                                                                                                              
+;   ;;;;;;;  ;;;;;;;  ;;;  ;;;   ;;     ;;;;;               ;;; ;  ;;; ;;;  ;;;;;;;  ;;;;;;;    ;;; ;  ;;;  ;;;
+;    ;    ;     ;      ;;   ;     ;       ;                ;   ;;   ;   ;    ;    ;  ;  ;  ;   ;   ;;   ;    ; 
+;    ;  ; ;     ;      ; ;  ;    ; ;      ;                ;    ;   ;  ;     ;  ; ;  ;  ;  ;  ;     ;   ;    ; 
+;    ;;;;       ;      ; ;  ;    ; ;      ;                 ;;;;    ;;;      ;;;;    ;  ;  ;  ;         ;;;;;; 
+;    ;  ;       ;      ;  ; ;   ;   ;     ;   ;                 ;   ;  ;     ;  ;       ;     ;         ;    ; 
+;    ;          ;      ;  ; ;   ;;;;;     ;   ;            ;    ;   ;   ;    ;    ;     ;     ;         ;    ; 
+;    ;          ;      ;   ;;  ;     ;    ;   ;            ;;   ;   ;    ;   ;    ;     ;      ;    ;   ;    ; 
+;   ;;;;     ;;;;;;;  ;;;  ;; ;;;   ;;; ;;;;;;;            ; ;;;   ;;;   ;; ;;;;;;;   ;;;;;     ;;;;   ;;;  ;;;
+;                                                                                                              
+;                                                                                                              
+;                                                                                                              
+;                                                                                                              
+
+
 
 (define (display-sketch [sk GS])
   (display
@@ -200,14 +374,9 @@
 @build-inputs-declarations[(sketch-inputs sk)]
 @build-outputs-declarations[(sketch-outputs sk)]
 
+@generate-states-def[(sketch-states sk)]
 
-enum State{
-   EVEN_ON,
-   ODD_ON,
-   RETURN_ODD,
-   RETURN_EVEN
-   };
-
+State currentState;
 
              
 void setup() {
@@ -215,12 +384,13 @@ void setup() {
 @build-inputs-setup[(sketch-inputs sk)]
 @build-outputs-setup[(sketch-outputs sk)]
   
-  ...
+  @format["currentState= ~a;" (symbol->string (sketch-init sk))]
 }
 
 void loop() {
-  
-  delay(1000);
+  @express-rules[sk]
+
+  @express-transitions[sk]
 }
  }))
 
@@ -245,9 +415,5 @@ void loop() {
 
 ;;State currentState = EVEN_ON;
 @initial-state[(...?)]
-
-@states[(sketch-states sk)]
 |#
-
-
 

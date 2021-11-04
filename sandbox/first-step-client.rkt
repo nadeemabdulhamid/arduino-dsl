@@ -1,7 +1,6 @@
 #lang racket
 
-;(require "first-step-defs.rkt")
-(require "REORG-first-step-defs.rkt")
+(require "first-step-defs.rkt")
 
 (define-input-pin 'btnA 2)   ; digital input, debounced by default
 (define-input-pin 'btnB 3)
