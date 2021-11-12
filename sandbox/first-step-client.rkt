@@ -17,11 +17,12 @@
                    (RETURN_ODD )
                    (RETURN_EVEN ) ))
 
-(transitions '( (EVEN_ON btnA ODD_ON)
+(transitions '( (EVEN_ON (rose btnA) ODD_ON)
                 (ODD_ON btnA EVEN_ON)
                 (EVEN_ON btnB RETURN_EVEN)
                 (ODD_ON btnB RETURN_ODD)
                 (RETURN_EVEN btnB EVEN_ON)
+                ;(RETURN_EVEN (time 10000) EVEN_ON)
                 (RETURN_ODD btnB ODD_ON)))
 
 #|

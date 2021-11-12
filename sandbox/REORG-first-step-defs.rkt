@@ -175,18 +175,18 @@
   (string-append
   (string-join
     (for/list ([b (sketch-inputs sk)])
-      (format "boolean ~a_pressed = debouncer_~a.fell();"
-              (first b) (first b))) "\n")
+      (format  "debouncer_~a.update(); \n boolean ~a_pressed = debouncer_~a.fell();"
+              (first b)(first b) (first b))) "\n")
 
   "\n"
-  (format "if (currentState = ~a && ~a_pressed) { currentState = ~a;}" ; builds the first if statement
+  (format "if (currentState == ~a && ~a_pressed) { currentState = ~a;}" ; builds the first if statement
           (transition-cur (first (sketch-trans sk)))
           (transition-inp (first (sketch-trans sk)))
           (transition-next(first (sketch-trans sk))))
   "\n"
   (string-join
   (for/list ([t (sketch-trans sk)])
-      (format "else if (currentState = ~a && ~a_pressed){ currentState = ~a;}" ; does the same thing but is now else if statements 
+      (format "else if (currentState == ~a && ~a_pressed){ currentState = ~a;}" ; does the same thing but is now else if statements 
               (transition-cur t)
               (transition-inp t)
               (transition-next t))) "\n")))
@@ -258,7 +258,7 @@ void loop() {
   (define strs
     (for/list ([ip  loi])
       ;(string-append "pinMode( " (symbol->string (first ip)) ", INPUT);")))
-      (format "pinMode(~a, INPUT);" (first ip))))
+      (format "debouncer_~a.attach(~a, INPUT);" (first ip)(first ip))))
   (string-join strs "\n"))
 
 
