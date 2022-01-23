@@ -14,8 +14,14 @@
          Nonnegative-Integer
          (Listof Symbol)))
 
+(define-type States-Decl
+  (List 'states
+        Symbol
+        (Listof Symbol)))
+
 (define-type Decl
-  (U Pin-Decl))
+  (U Pin-Decl
+     States-Decl))
 
 (define-type Stmt (Listof Any))
 (define-type Prog-Tree (List (Listof Stmt)   ; globals
@@ -31,10 +37,13 @@
   `((pin btnA input digital 2)
     (pin btnB input digital 3)
     (pin p1 output digital 8)
-    (pin p2 output digital 9)))
+    (pin p2 output digital 9)
+
+    (states main (EVEN-ON ODD-ON RETURN-ODD RETURN-EVEN))
+    ))
 
 
-(define blank-program
+(define blank-program : Prog-Tree
   '(() () (() () ())))
 
 
@@ -55,7 +64,23 @@
 
 (define (expand-declr [d : Decl] [all-ds : (Listof Decl)] [root : Prog-Tree]) : Prog-Tree
   (match d
-    [(cons 'pin _) (expand-pin-declr d all-ds root)]))
+    [(cons 'pin _) (expand-pin-declr d all-ds root)]
+    [(cons 'states _) (expand-states-declr d all-ds root)]
+    [else (printf "Unhandled ~a~n" d) root]))
+
+
+
+(define (expand-states-declr [d : States-Decl] [all-ds : (Listof Decl)] [root : Prog-Tree]) : Prog-Tree
+  (match root
+    [(list glob setup loop)
+     (match d
+       [(list 'states id labels)
+        (define new-glob
+          `(,@glob
+            (%enum ,(id-link id 'State) ,labels)
+            (%define ,(id-link id 'State) ,(id-link id 'current) ,(first labels))))
+        
+        (list new-glob setup loop)])]))
 
 
 
@@ -72,8 +97,7 @@
         (expand-digital-output-pin id num opts all-ds root)]
 
        [else
-        (printf "Unhandled ~a~n" d)
-        root]))
+        (printf "Unhandled ~a~n" d) root]))
 
 
 
@@ -135,20 +159,36 @@
 
 ;;; Translating AST to C
 
+(define indent-level (make-parameter 0))
+(define-syntax-rule (incr-indent body)
+  (parameterize ([indent-level (+ 2 (indent-level))])
+    body))
+(define (apply-indent [str : String]) : String
+  (string-append (build-string (indent-level) (λ(_) #\space)) str))
+
+
+
+(define (symbol->c [sym : Symbol]) : String
+  (string-replace (symbol->string sym) "-" "_"))
+
+
 (define (expr->c [expr : Any]) : String
   (match expr
     [(? number? _)
      (~a expr)]
 
     [(? symbol? _)
-     (~a expr)]
+     (symbol->c expr)]
 
     [(? string? _)
      (format "\"~a\"" expr)]
 
     ; duplicate in stmt->c
     [(list* '%send obj meth params)
-     (format "~a.~a(~a)" obj meth (string-join (map expr->c (cast params (Listof Any))) ", "))]
+     (format "~a.~a(~a)"
+             (symbol->c (cast obj Symbol))
+             (symbol->c (cast meth Symbol))
+             (string-join (map expr->c (cast params (Listof Any))) ", "))]
 
     ; duplicate in stmt->c
     [(list* fn params)
@@ -158,24 +198,32 @@
 
 
 (define (stmt->c [stmt : Stmt]) : String
-  (match stmt
-    [(list '%include (? symbol? name))
-     (format "#include <~a>" name)]
-    [(list '%include (? string? name))
-     (format "#include \"~a\"" name)]
+  (apply-indent
+   (match stmt
+     [(list '%include (? symbol? name))
+      (format "#include <~a>" name)]
+     [(list '%include (? string? name))
+      (format "#include \"~a\"" name)]
 
-    [(list '%define ty id expr)
-     (format "~a ~a = ~a;" ty id (expr->c expr))]
+     [(list '%define ty id expr)
+      (format "~a ~a = ~a;" (symbol->c (cast ty Symbol)) (symbol->c (cast id Symbol)) (expr->c expr))]
 
-    ; duplicate in expr->c
-    [(list* '%send obj meth params)
-     (format "~a.~a(~a);" obj meth (string-join (map expr->c (cast params (Listof Any))) ", "))]
+     [(list '%enum id labels)
+      (format "enum ~a { ~a };" (symbol->c (cast id Symbol))
+              (string-join (map symbol->c (cast labels (Listof Symbol))) ", "))]
+
+     ; duplicate in expr->c
+     [(list* '%send obj meth params)
+      (format "~a.~a(~a);"
+              (symbol->c (cast obj Symbol))
+              (symbol->c (cast meth Symbol))
+              (string-join (map expr->c (cast params (Listof Any))) ", "))]
         
-    ; duplicate in expr->c
-    [(list* fn params)
-     (format "~a(~a);" fn (string-join (map expr->c (cast params (Listof Any))) ", "))]
+     ; duplicate in expr->c
+     [(list* fn params)
+      (format "~a(~a);" fn (string-join (map expr->c (cast params (Listof Any))) ", "))]
     
-    [else "----"]))
+     [else "----"])))
 
 
 (define (prog-tree->c-sketch [root : Prog-Tree]) : String
@@ -186,14 +234,14 @@
       (string-join (map stmt->c glob) "\n")
       "\n\n"
       "void setup() {\n"
-      (string-join (map (λ([s : Stmt]) (string-append "  " (stmt->c s))) setup) "\n")
+      (string-join (map (λ([s : Stmt]) (incr-indent (stmt->c s))) setup) "\n")
       "\n}\n\n"
       "void loop() {\n"
-      (string-join (map (λ([s : Stmt]) (string-append "  " (stmt->c s))) outp-upd) "\n")
+      (string-join (map (λ([s : Stmt]) (incr-indent (stmt->c s))) outp-upd) "\n")
       "\n"
-      (string-join (map (λ([s : Stmt]) (string-append "  " (stmt->c s))) inp-upd) "\n")
+      (string-join (map (λ([s : Stmt]) (incr-indent (stmt->c s))) inp-upd) "\n")
       "\n"
-      (string-join (map (λ([s : Stmt]) (string-append "  " (stmt->c s))) trans) "\n")
+      (string-join (map (λ([s : Stmt]) (incr-indent (stmt->c s))) trans) "\n")
       "\n}\n\n")]))
 
   
@@ -216,32 +264,6 @@
 
 
 
-
-
-
-
-
-
-
-
-
-
-#;(struct pin ([id : Symbol]
-             [io : (U 'input 'output)]
-             [ad : (U 'analog 'digital)]
-             [number : Nonnegative-Integer]
-             [opts : (Listof Symbol)]) #:transparent)
-
-#;(struct sketch ([pins : (Listof Pin-Decl)]) #:mutable #:transparent)
-
-
-#;(define (define-pin [sk : sketch]
-          [id : Symbol]
-          [io : (U 'input 'output)]
-          [num : Nonnegative-Integer]
-          #:ad [ad : (U 'analog 'digital) 'digital]
-          #:opts [opts : (Listof Symbol) '()])
-  (set-sketch-pins! sk (cons (list 'pin id io ad num opts) (sketch-pins sk))))
 
 
 
